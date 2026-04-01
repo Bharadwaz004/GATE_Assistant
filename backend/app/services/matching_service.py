@@ -17,18 +17,14 @@ from app.models import MatchingScore, User, UserEmbedding, UserProfile
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# ── Module-level model cache ─────────────────────────────────
-_embedding_model = None
-
-
-def _load_embedding_model():
-    """Lazily load the sentence-transformers model."""
-    global _embedding_model
-    if _embedding_model is None:
-        from sentence_transformers import SentenceTransformer
-        logger.info(f"Loading embedding model: {settings.embedding_model}")
-        _embedding_model = SentenceTransformer(settings.embedding_model)
-    return _embedding_model
+def _text_to_vector(text: str, all_texts: List[str]) -> List[float]:
+    """Generate TF-IDF vector for text given a corpus."""
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    corpus = list(dict.fromkeys(all_texts + [text]))  # deduplicated
+    vectorizer = TfidfVectorizer()
+    matrix = vectorizer.fit_transform(corpus)
+    idx = corpus.index(text)
+    return matrix[idx].toarray().flatten().tolist()
 
 
 class MatchingService:
@@ -72,11 +68,9 @@ class MatchingService:
         return ". ".join(text_parts)
 
     @staticmethod
-    def generate_embedding(text: str) -> List[float]:
-        """Generate embedding vector from profile text."""
-        model = _load_embedding_model()
-        embedding = model.encode(text, normalize_embeddings=True)
-        return embedding.tolist()
+    def generate_embedding(text: str, corpus: List[str] = None) -> List[float]:
+        """Generate TF-IDF vector from profile text."""
+        return _text_to_vector(text, corpus or [text])
 
     @staticmethod
     def cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
@@ -98,7 +92,7 @@ class MatchingService:
     ) -> UserEmbedding:
         """Create or update embedding for a user profile."""
         profile_text = self.profile_to_text(profile)
-        vector = self.generate_embedding(profile_text)
+        vector = self.generate_embedding(profile_text, [profile_text])
 
         # Check for existing embedding
         result = await db.execute(
@@ -143,8 +137,6 @@ class MatchingService:
         if not user_embedding:
             return []
 
-        user_vector = user_embedding.embedding_vector
-
         # Get all other embeddings
         result = await db.execute(
             select(UserEmbedding).where(UserEmbedding.user_id != user_id)
@@ -154,13 +146,23 @@ class MatchingService:
         if not other_embeddings:
             return []
 
-        # Compute similarities
+        # Recompute similarities using shared TF-IDF corpus for consistent dimensions
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.metrics.pairwise import cosine_similarity as sk_cosine
+
+        all_texts = [user_embedding.profile_text] + [o.profile_text for o in other_embeddings]
+        vectorizer = TfidfVectorizer()
+        matrix = vectorizer.fit_transform(all_texts)
+
+        user_vec = matrix[0]
+        other_vecs = matrix[1:]
+        scores = sk_cosine(user_vec, other_vecs).flatten()
+
         matches = []
-        for other in other_embeddings:
-            score = self.cosine_similarity(user_vector, other.embedding_vector)
+        for i, other in enumerate(other_embeddings):
             matches.append({
                 "user_id": str(other.user_id),
-                "similarity_score": round(score, 4),
+                "similarity_score": round(float(scores[i]), 4),
             })
 
         # Sort by similarity (descending) and take top N
