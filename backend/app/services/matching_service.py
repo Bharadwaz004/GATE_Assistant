@@ -128,29 +128,35 @@ class MatchingService:
         3. Compute cosine similarities
         4. Return sorted top-N matches with profile details
         """
-        # Get current user's embedding
-        result = await db.execute(
-            select(UserEmbedding).where(UserEmbedding.user_id == user_id)
-        )
-        user_embedding = result.scalar_one_or_none()
-
-        if not user_embedding:
-            return []
-
-        # Get all other embeddings
-        result = await db.execute(
-            select(UserEmbedding).where(UserEmbedding.user_id != user_id)
-        )
-        other_embeddings = result.scalars().all()
-
-        if not other_embeddings:
-            return []
-
-        # Recompute similarities using shared TF-IDF corpus for consistent dimensions
         from sklearn.feature_extraction.text import TfidfVectorizer
         from sklearn.metrics.pairwise import cosine_similarity as sk_cosine
 
-        all_texts = [user_embedding.profile_text] + [o.profile_text for o in other_embeddings]
+        # Fetch all onboarded users with profiles (including current user)
+        all_profiles_result = await db.execute(
+            select(UserProfile)
+        )
+        all_profiles = {p.user_id: p for p in all_profiles_result.scalars().all()}
+
+        if user_id not in all_profiles:
+            return []
+
+        other_ids = [uid for uid in all_profiles if uid != user_id]
+        if not other_ids:
+            return []
+
+        # Build profile texts — use stored embeddings if available, else generate from profile
+        emb_result = await db.execute(select(UserEmbedding))
+        stored = {e.user_id: e.profile_text for e in emb_result.scalars().all()}
+
+        def get_text(uid):
+            if uid in stored:
+                return stored[uid]
+            return self.profile_to_text(all_profiles[uid])
+
+        user_text = get_text(user_id)
+        other_texts = [get_text(uid) for uid in other_ids]
+
+        all_texts = [user_text] + other_texts
         vectorizer = TfidfVectorizer()
         matrix = vectorizer.fit_transform(all_texts)
 
@@ -159,9 +165,9 @@ class MatchingService:
         scores = sk_cosine(user_vec, other_vecs).flatten()
 
         matches = []
-        for i, other in enumerate(other_embeddings):
+        for i, uid in enumerate(other_ids):
             matches.append({
-                "user_id": str(other.user_id),
+                "user_id": str(uid),
                 "similarity_score": round(float(scores[i]), 4),
             })
 
