@@ -6,7 +6,6 @@ Uses pydantic-settings for validation and type coercion.
 from functools import lru_cache
 from typing import List
 
-from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,23 +48,18 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://localhost:6379/2"
 
     # ── CORS ─────────────────────────────────────────────────
-    cors_origins: List[str] = [
-        "http://localhost:5173",
-        "http://localhost:3000",
-    ]
+    cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def parse_cors(cls, v):
+    def get_cors_origins(self) -> List[str]:
+        import json
+        v = self.cors_origins.strip()
         if not v:
             return ["http://localhost:5173", "http://localhost:3000"]
-        if isinstance(v, str):
-            import json
-            try:
-                return json.loads(v)
-            except Exception:
-                return [i.strip() for i in v.split(",") if i.strip()]
-        return v
+        try:
+            result = json.loads(v)
+            return result if isinstance(result, list) else [result]
+        except Exception:
+            return [i.strip() for i in v.split(",") if i.strip()]
 
     @property
     def is_production(self) -> bool:
