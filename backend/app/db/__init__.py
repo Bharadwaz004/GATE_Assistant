@@ -15,11 +15,15 @@ from app.config import get_settings
 settings = get_settings()
 
 # ── Async Engine ─────────────────────────────────────────────
-_is_remote = "localhost" not in settings.database_url and "127.0.0.1" not in settings.database_url
+_db_url = settings.database_url
+if _db_url.startswith("postgresql://"):
+    _db_url = _db_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+_is_remote = "localhost" not in _db_url and "127.0.0.1" not in _db_url
 _connect_args = {"ssl": "require"} if _is_remote else {}
 
 engine = create_async_engine(
-    settings.database_url,
+    _db_url,
     echo=settings.debug,
     pool_size=20,
     max_overflow=10,
