@@ -15,6 +15,9 @@ from app.config import get_settings
 settings = get_settings()
 
 # ── Async Engine ─────────────────────────────────────────────
+_is_remote = "localhost" not in settings.database_url and "127.0.0.1" not in settings.database_url
+_connect_args = {"ssl": "require"} if _is_remote else {}
+
 engine = create_async_engine(
     settings.database_url,
     echo=settings.debug,
@@ -22,6 +25,7 @@ engine = create_async_engine(
     max_overflow=10,
     pool_pre_ping=True,
     pool_recycle=3600,
+    connect_args=_connect_args,
 )
 
 # ── Session Factory ──────────────────────────────────────────
