@@ -6,6 +6,7 @@ Uses pydantic-settings for validation and type coercion.
 from functools import lru_cache
 from typing import List
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,6 +53,19 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://localhost:3000",
     ]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors(cls, v):
+        if not v:
+            return ["http://localhost:5173", "http://localhost:3000"]
+        if isinstance(v, str):
+            import json
+            try:
+                return json.loads(v)
+            except Exception:
+                return [i.strip() for i in v.split(",") if i.strip()]
+        return v
 
     @property
     def is_production(self) -> bool:
